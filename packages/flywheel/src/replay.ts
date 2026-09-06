@@ -35,6 +35,7 @@
 //       bundles, only binds every bundle produced after this check shipped.
 import { verifyReceipt, canon } from './receipts.js';
 import { gateFingerprint } from './gate.js';
+import { pairedOutcomesFromItemWins } from './sequential.js';
 import type { ReplayBundle, PromotionRule, LineageCommit, Score } from './types.js';
 
 // A bundle is untrusted external JSON — `baselineScore != null` only proves the field exists, not that
@@ -174,7 +175,14 @@ export function verifyReplayBundle(
           break;
         }
         const anchor = rootAnchorSealed != null ? { baseline: rootAnchorSealed, candidate: c.anchorScore! } : undefined;
-        if (!opts.promotionRule({ baseline: c.baselineScore, candidate: c.candidateScore, anchor }).promote) {
+        // Sequential-evidence re-verification (2026-09-06 addendum, same ADR): a PROMOTED commit whose
+        // sealed baseline/candidate scores carry `itemWins` (see Score.itemWins) is re-gated with the SAME
+        // pairedOutcomes it was LIVE-gated with — a caller that live-gates with
+        // `withSequentialEvidence(...)` must not have that guarantee silently re-verified as just the
+        // wrapped base rule during replay. Absent `itemWins` (every bundle produced before tonight, and
+        // any non-sequential Evaluator), this is `undefined` and behavior is byte-for-byte unchanged.
+        const pairedOutcomes = pairedOutcomesFromItemWins(c.baselineScore, c.candidateScore);
+        if (!opts.promotionRule({ baseline: c.baselineScore, candidate: c.candidateScore, anchor, ...(pairedOutcomes ? { pairedOutcomes } : {}) }).promote) {
           gateReExecutes = false;
           break;
         }
