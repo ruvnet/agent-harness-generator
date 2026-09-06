@@ -5,11 +5,24 @@
 // the FROZEN anchor is a separate survival check (never optimized against — the anti-Goodhart guard).
 import { InMemoryLineageStore, computeLiftCurve } from './lineage.js';
 import { meetsPromotionRule, gateFingerprint } from './gate.js';
+import { pairedOutcomesFromItemWins } from './sequential.js';
 import type {
   Policy, PolicyGenome, Proposer, Evaluator, PromotionRule, Signer, CandidateMutation,
   HoldoutSuite, AnchorSuite, LineageStore, LineageCommit, LiftCurve, ReplayBundle, Score,
-  GenerationCheckpoint, ResumeState,
+  GenerationCheckpoint, ResumeState, PairedOutcome,
 } from './types.js';
+
+/** Builds the per-item pairing a sequential-evidence rule (`withSequentialEvidence`, sequential.ts) needs,
+ *  when — and only when — BOTH the baseline and candidate Score carry a suite-aligned `itemWins` vector
+ *  (see {@link Score.itemWins}). Otherwise returns `undefined` so the rule call omits `pairedOutcomes`
+ *  entirely and any sequential-evidence rule degrades to its base rule, unchanged from today — this
+ *  package's only Evaluators that don't opt in are completely unaffected by this wiring existing. The
+ *  extra `suiteLen` check (on top of `pairedOutcomesFromItemWins`'s own length-agreement check) guards
+ *  against an Evaluator whose `itemWins` silently drifted from the actual holdout it was called with. */
+function pairedOutcomesOf(baseline: Score, candidate: Score, suiteLen: number): PairedOutcome[] | undefined {
+  const paired = pairedOutcomesFromItemWins(baseline, candidate);
+  return paired && paired.length === suiteLen ? paired : undefined;
+}
 
 export interface FlywheelConfig {
   /** The gen-0 policy — the immutable root every promotion chains back to. */
@@ -156,7 +169,11 @@ export async function runFlywheelGenerations(cfg: FlywheelConfig): Promise<Flywh
       const norm = typeof proposed === 'string' ? { value: proposed } : proposed;
       const candPolicy: Policy = { ...policy, [target]: norm.value };
       const candScore = await evaluate(candPolicy, cfg.holdout);
-      const decision = rule({ baseline: score, candidate: candScore });
+      // Anytime-valid sequential evidence (sequential.ts) can only ever gate a LIVE run through this call —
+      // it needs it here, not just at replay, since it decides which candidate gets promoted in the first
+      // place. See `pairedOutcomesOf` above: populated only when the Evaluator opts in via `itemWins`.
+      const pairedOutcomes = pairedOutcomesOf(score, candScore, cfg.holdout.items.length);
+      const decision = rule({ baseline: score, candidate: candScore, ...(pairedOutcomes ? { pairedOutcomes } : {}) });
       cands.push({
         target, policy: candPolicy, score: candScore, reasons: decision.reasons, promote: decision.promote,
         summary: norm.summary, inverse: norm.inverse,

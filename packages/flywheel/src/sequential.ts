@@ -32,15 +32,9 @@
 // a candidate win against a baseline loss multiplies the e-value up, the
 // reverse multiplies it down, and ties leave it unchanged.
 
-import type { PromotionDecision, PromotionEvidence, PromotionRule } from './types.js';
+import type { PairedOutcome, PromotionDecision, PromotionEvidence, PromotionRule, Score } from './types.js';
 
-/** Per-item paired outcome: did candidate and baseline each succeed? */
-export interface PairedOutcome {
-  /** Suite item id. Pairing is by item — comparing unpaired sets is a different, weaker test. */
-  itemId: string;
-  candidateWon: boolean;
-  baselineWon: boolean;
-}
+export type { PairedOutcome } from './types.js';
 
 export interface SequentialConfig {
   /**
@@ -68,6 +62,21 @@ export interface SequentialVerdict {
 
 const DEFAULT_ALPHA = 0.05;
 const DEFAULT_LAMBDA = 0.5;
+
+/** Reconstructs the per-item pairing `sequentialEvidence`/`withSequentialEvidence` need from two Scores
+ *  that each carry a same-length {@link Score.itemWins} vector evaluated over the SAME suite. Returns
+ *  `undefined` when either side omits it or the lengths disagree — the caller then simply omits
+ *  `pairedOutcomes`, and any sequential-evidence rule degrades to its base rule (see
+ *  `withSequentialEvidence`'s own degrade-safe contract). Shared by the LIVE promotion loop (`run.ts`) and
+ *  independent replay's gate re-execution (`replay.ts`, ADR-235) so a sequential-gated promotion is
+ *  re-verified with the SAME evidence it was live-gated with, instead of replay silently re-running only
+ *  the wrapped base rule. */
+export function pairedOutcomesFromItemWins(baseline: Score, candidate: Score): PairedOutcome[] | undefined {
+  const bw = baseline.itemWins;
+  const cw = candidate.itemWins;
+  if (!bw || !cw || bw.length !== cw.length) return undefined;
+  return bw.map((baselineWon, i) => ({ itemId: String(i), candidateWon: cw[i]!, baselineWon }));
+}
 
 /**
  * Accumulate paired outcomes into an anytime-valid e-value.
@@ -115,10 +124,12 @@ export function sequentialEvidence(
  * clause of `baseRule`, and evidence strong enough to survive having been
  * looked at repeatedly.
  *
- * Paired outcomes are read from `evidence.pairedOutcomes` when present. When
- * absent the rule degrades to `baseRule` alone rather than silently blocking
- * every promotion — a caller that has not wired up per-item outcomes yet should
- * get the old behavior, not a permanently closed gate.
+ * Paired outcomes are read from `evidence.pairedOutcomes` when present (see
+ * {@link PromotionEvidence.pairedOutcomes} — `runFlywheelGenerations` populates
+ * it automatically when the Evaluator sets `Score.itemWins` on both sides).
+ * When absent the rule degrades to `baseRule` alone rather than silently
+ * blocking every promotion — a caller that has not wired up per-item outcomes
+ * yet should get the old behavior, not a permanently closed gate.
  */
 export function withSequentialEvidence(
   baseRule: PromotionRule,
@@ -126,8 +137,7 @@ export function withSequentialEvidence(
 ): PromotionRule {
   return function sequentialPromotionRule(evidence: PromotionEvidence): PromotionDecision {
     const base = baseRule(evidence);
-    const outcomes = (evidence as PromotionEvidence & { pairedOutcomes?: PairedOutcome[] })
-      .pairedOutcomes;
+    const outcomes = evidence.pairedOutcomes;
 
     if (!outcomes) return base;
 

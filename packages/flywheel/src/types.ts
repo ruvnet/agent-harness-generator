@@ -41,14 +41,38 @@ export interface Score {
   costPerWin: number;
   /** A hard safety/security regression flag — any `true` blocks promotion outright. */
   regressed: boolean;
+  /** OPTIONAL, additive: per-item win indicator, one entry per `suite.items`, in the SAME order the
+   *  Evaluator was called with — e.g. `[true, false, true, ...]` meaning "this policy won item 0, lost
+   *  item 1, won item 2". An Evaluator that wants its promotions covered by the anytime-valid sequential
+   *  gate (see `sequential.ts`) sets this on both the baseline and candidate Score it returns for the SAME
+   *  suite; `runFlywheelGenerations` zips the two arrays by index into `PromotionEvidence.pairedOutcomes`.
+   *  Absent (the default) ⇒ no pairing is possible and any sequential-evidence rule degrades to its base
+   *  rule, unchanged from today. */
+  itemWins?: boolean[];
+}
+
+/** One paired per-item outcome — did the candidate and the baseline each win THIS suite item? Only a
+ *  DISCORDANT pair (exactly one side won) carries information for the sequential e-process in
+ *  `sequential.ts`; see `sequentialEvidence`. */
+export interface PairedOutcome {
+  /** Suite item id. Pairing is by item — comparing unpaired sets is a different, weaker test. When the
+   *  two `Score.itemWins` vectors are reconstructed from a plain positional array (no typed item ids are
+   *  available — see `Suite.items: unknown[]`), this is the array index, stringified; it is still a
+   *  stable, unique per-item key within one comparison, which is all `sequentialEvidence` needs. */
+  itemId: string;
+  candidateWon: boolean;
+  baselineWon: boolean;
 }
 
 /** What a promotion gate decides over. `anchor` (optional) is the FROZEN, never-optimized-against suite
- *  score — the anti-Goodhart check. */
+ *  score — the anti-Goodhart check. `pairedOutcomes` (optional) is the per-item breakdown a sequential-
+ *  evidence rule (`withSequentialEvidence`, sequential.ts) reads; see {@link Score.itemWins} for how it is
+ *  populated. Absent for any caller that has not wired up per-item outcomes. */
 export interface PromotionEvidence {
   baseline: Score;
   candidate: Score;
   anchor?: { baseline: number; candidate: number };
+  pairedOutcomes?: PairedOutcome[];
 }
 
 export interface PromotionDecision {
