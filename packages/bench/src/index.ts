@@ -22,6 +22,8 @@
 
 import { performance } from 'node:perf_hooks';
 
+export * from './instrument-qualification.js';
+
 export type EvalCategory = 'single-hop' | 'temporal' | 'multi-hop' | 'open-domain';
 
 export interface MemoryItem {
