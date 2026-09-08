@@ -98,3 +98,16 @@ cross-file consistency. 565/565 tests (+2), `tsc --noEmit` clean, no
 behavior change. Posted as a PR comment distinguishing "the base branch
 moving fixed this" from "this session fixed this" rather than claiming
 credit for the former.
+
+| 2026-09-08 | security-adversarial | `score.ts`'s `scoreMcpSafety()` and `oia-manifest.ts`'s `readHarnessProfile()` shared threat-model.ts's pre-#276 narrow MCP-detection bug (issue #280); fixed by routing both through `scanMcp().mcpEnabled`. Direct repo inspection found the real blast radius: 20/22 scaffold templates unconditionally register a self-referential MCP server, 0/22 ever ship the governing `.harness/mcp-policy.json` — every default scaffold was scored falsely-safe. Found+fixed a real downstream test regression along the way (`harness-score.test.ts`'s stale MCP-off assumption for the `minimal` template), not swept under | #297 | #298 | yes | ACCEPT | create-agent-harness 572→587/589 (2 pre-existing skips, 0 regressions), root oia-manifest 9→10, root harness-score 1 assertion corrected+strengthened (2 pre-existing unrelated failures confirmed identical on baseline, not caused by this candidate); full monorepo run cross-checked vs. true baseline, 0 regressions; tsc clean; npm audit 0 vuln; live CLI smoke test confirmed | `0041151680...` | #293 (09-07) and #288 (09-06) both OPEN, ≤2 days old, not stale; 18/21 last dream/* PRs merged/closed — healthy merge rate, no zero-merge bias needed |
+
+**Note on 2026-09-08 (added same night):** an earlier attempt at tonight's cycle was started but lost to
+a mid-run container restart before any `dream/2026-09-08-*` branch was ever pushed — confirmed via
+`git ls-remote --heads origin "dream/*"` before starting, per direct evidence, not inferred. Tonight's row
+above is a fresh first attempt, not a resume. Also disclosed, not fixed tonight (out of one-conceptual-
+change scope): the deeper architecture gap that no scaffold template ever ships the ADR-022-mandated
+default-deny `.harness/mcp-policy.json` even though 20/22 templates turn MCP on by default (candidate #2
+in issue #297, score 3.60 vs. selected 4.80 — larger, riskier, touches the generator + every template);
+2 pre-existing unrelated `harness-score.test.ts` failures (stale 6-key vs. real 7-key badge shape, from
+an earlier unrelated PR #15); `mcp-scan.ts`'s missing per-host MCP surfaces and weak-typed policy-value
+comparisons (candidates #4/#5 in issue #297).

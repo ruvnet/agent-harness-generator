@@ -151,9 +151,19 @@ describe('harness score (iter 111)', () => {
     try {
       const r = await scoreCmd([dir, '--json']);
       const j = JSON.parse(r.lines.join('\n'));
-      // Minimal template scaffolds without MCP enabled by default,
-      // so mcpRisk should be 'None' (no policy + no .mcp.json).
-      expect(['None', 'Low']).toContain(j.mcpRisk);
+      // Dream Cycle 2026-09-08 (security-adversarial, issue #280): this
+      // assertion previously read 'None'/'Low' on the belief that the
+      // `minimal` template scaffolds without MCP enabled by default. That
+      // was itself a symptom of the bug this candidate fixes — the
+      // `minimal` template's `.claude/settings.json.tmpl` DOES register a
+      // self-referential `mcpServers` entry (so a host can call back into
+      // the generated harness's own CLI as an MCP tool), and no template
+      // ships a `.harness/mcp-policy.json`, so every default scaffold is
+      // MCP-in-use and fully ungoverned. `scoreMcpSafety()`'s old
+      // policy-file-or-.mcp.json-only detection missed the
+      // settings.json-only registration and silently reported the safest
+      // possible score for the actual state. Now correctly 'High'.
+      expect(j.mcpRisk).toBe('High');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

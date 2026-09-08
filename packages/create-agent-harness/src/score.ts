@@ -22,6 +22,7 @@
 import { existsSync, statSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { redactSecretsDeep } from './redact.js';
+import { scanMcp } from './mcp-scan.js';
 
 export type SubcommandResult = { code: number; lines: string[] };
 
@@ -152,8 +153,14 @@ interface McpScore extends DimensionScore {
 function scoreMcpSafety(dir: string): McpScore {
   const signals: string[] = [];
   const policy = safeReadJson(join(dir, '.harness', 'mcp-policy.json'));
-  // No policy + no .mcp.json at all = MCP not in use, which is the safest possible.
-  const hasMcp = policy != null || fileExists(dir, '.mcp.json');
+  // "In use" is decided by scanMcp()'s mcpEnabled — the one place that ORs
+  // all three valid registration surfaces (.harness/mcp-policy.json,
+  // .mcp.json, and .claude/settings.json's mcpServers key). A policy-file-
+  // or-.mcp.json-only check here missed the settings.json-only case and
+  // scored it as the safest possible posture (mcpRisk: 'None') even when a
+  // server was actually registered and ungoverned — see issue #280 (the
+  // same class of gap #276 closed in threat-model.ts on 2026-09-03).
+  const hasMcp = scanMcp(dir).mcpEnabled;
   if (!hasMcp) {
     signals.push('MCP not in use (mode=off — safest)');
     return { name: 'MCP safety', weight: 0.2, score: 100, signals, mcpRisk: 'None' };
