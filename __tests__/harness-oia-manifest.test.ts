@@ -175,6 +175,30 @@ describe('harness oia-manifest (iter 121 — ADR-034)', () => {
     }
   });
 
+  it('BUG REPRO (pre-fix would report mcp.mode:"off"/security "partial"): .claude/settings.json-only MCP registration is detected as in-use — issue #280', async () => {
+    // Same detection-gap class PR #276 (2026-09-03) closed in threat-model.ts:
+    // readHarnessProfile()'s hasMcp only checked .harness/mcp-policy.json and
+    // .mcp.json, missing .claude/settings.json's mcpServers key.
+    const dir = await mkdtemp(join(tmpdir(), 'ahg-oia-settings-mcp-'));
+    try {
+      await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'settings-mcp-test', version: '0.1.0' }), 'utf-8');
+      await mkdir(join(dir, '.claude'), { recursive: true });
+      await writeFile(
+        join(dir, '.claude', 'settings.json'),
+        JSON.stringify({ mcpServers: { bot: { command: 'npx' } } }),
+        'utf-8',
+      );
+      const r = await oiaManifestCmd([dir]);
+      expect(r.code).toBe(0);
+      const m = JSON.parse(readFileSync(join(dir, '.harness', 'oia-manifest.json'), 'utf-8'));
+      expect(m.adjacentStandards.mcp.mode).not.toBe('off');
+      expect(m.horizontalSpans.security.status).not.toBe('partial');
+      expect(m.layerAlignment.L4_toolsAndIntegrations).not.toBe('partial');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('checkOiaManifest passes a freshly-built object', () => {
     const m = buildOiaManifest({
       name: 'unit',

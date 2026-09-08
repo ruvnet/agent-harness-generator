@@ -20,6 +20,7 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { scanMcp } from './mcp-scan.js';
 
 export type SubcommandResult = { code: number; lines: string[] };
 
@@ -79,7 +80,13 @@ function readHarnessProfile(dir: string): HarnessProfile {
   const pkg = safeReadJson(join(root, 'package.json')) ?? {};
   const manifest = safeReadJson(join(root, '.harness', 'manifest.json')) ?? {};
   const mcpPolicy = safeReadJson(join(root, '.harness', 'mcp-policy.json'));
-  const hasMcp = mcpPolicy != null || existsSync(join(root, '.mcp.json'));
+  // In-use detection routes through scanMcp()'s mcpEnabled (the authoritative
+  // OR of all 3 valid registration surfaces — policy file, .mcp.json, and
+  // .claude/settings.json's mcpServers) rather than re-deriving a narrower,
+  // policy-file-or-.mcp.json-only check here. A settings.json-only harness
+  // was previously reported ADR-034 mcp.mode:"off" / security span "partial"
+  // even with a live, ungoverned MCP server registered — see issue #280.
+  const hasMcp = scanMcp(root).mcpEnabled;
   // mcpMode inference: presence of mcp-policy with `mode: remote` → remote;
   // policy present without remote signal → local; otherwise off.
   let mcpMode: 'off' | 'local' | 'remote' = 'off';
