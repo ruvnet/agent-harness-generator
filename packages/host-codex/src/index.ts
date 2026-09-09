@@ -52,11 +52,28 @@ export function tomlEscape(s: string): string {
     .replace(/\t/g, '\\t');
 }
 
+/** TOML bare-key charset per the TOML spec: `[A-Za-z0-9_-]+`. */
+const TOML_BARE_KEY = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Render a TOML dotted table-header key, quoting it when it isn't a safe
+ * bare key. `[mcp_servers.${s.name}]` was previously interpolated bare
+ * (ADR-046 bug class): a name containing `]`, `.`, `#`, or a newline could
+ * close the table header early and inject arbitrary top-level TOML keys —
+ * the same "unescaped name breaks a generated structured-config document"
+ * shape as #188 (hermes YAML)/#212 (github-actions YAML). TOML quoted keys
+ * use the same escaping as basic strings (tomlEscape).
+ */
+function tomlKey(s: string): string {
+  return TOML_BARE_KEY.test(s) ? s : `"${tomlEscape(s)}"`;
+}
+
 /**
  * Render a single MCP server entry as a TOML table.
  */
 export function serverToToml(s: McpServerSpec): string {
-  const lines: string[] = [`[mcp_servers.${s.name}]`];
+  const key = tomlKey(s.name);
+  const lines: string[] = [`[mcp_servers.${key}]`];
   if (s.command && s.command.length > 0) {
     lines.push(`command = "${tomlEscape(s.command[0]!)}"`);
     if (s.command.length > 1) {
@@ -67,9 +84,9 @@ export function serverToToml(s: McpServerSpec): string {
     lines.push(`url = "${tomlEscape(s.url)}"`);
   }
   if (s.env && s.env.length > 0) {
-    lines.push(`[mcp_servers.${s.name}.env]`);
+    lines.push(`[mcp_servers.${key}.env]`);
     for (const [k, v] of s.env) {
-      lines.push(`${k} = "${tomlEscape(v)}"`);
+      lines.push(`${tomlKey(k)} = "${tomlEscape(v)}"`);
     }
   }
   return lines.join('\n');
@@ -82,20 +99,39 @@ export function configToml(spec: HarnessSpec): string {
   return (spec.mcpServers ?? []).map(serverToToml).join('\n\n') + '\n';
 }
 
+/** Quote one shell argument (single-quote, escaping embedded single quotes). */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * Strip CR/LF from a string destined for a raw `#`-comment line. A comment
+ * line has no quoting to escape *into*; a literal newline in the source
+ * string is the only character that can break out of it and turn the
+ * remainder into a live shell statement (mirrors host-rvm's `commentSafe`).
+ */
+function commentSafe(s: string): string {
+  return s.replace(/[\r\n]+/g, ' ');
+}
+
 /**
  * Build the `codex mcp add` command lines for the harness's MCP servers.
  * Useful for users on the programmatic-install path.
+ * ADR-046 bug class: name/env/command/url were interpolated into a shell
+ * line unescaped — a value containing shell metacharacters could inject
+ * arbitrary commands into the generated install-mcp.sh.
  */
 export function mcpAddCommands(spec: HarnessSpec): string[] {
   return (spec.mcpServers ?? []).map(s => {
-    const env = (s.env ?? []).map(([k, v]) => `--env ${k}=${v}`).join(' ');
+    const env = (s.env ?? []).map(([k, v]) => `--env ${shellQuote(`${k}=${v}`)}`).join(' ');
     if (s.command) {
-      return `codex mcp add ${env} ${s.name} -- ${s.command.join(' ')}`.replace(/\s+/g, ' ');
+      const cmd = s.command.map(shellQuote).join(' ');
+      return `codex mcp add ${env} ${shellQuote(s.name)} -- ${cmd}`.replace(/\s+/g, ' ').trim();
     }
     if (s.url) {
-      return `codex mcp add ${env} ${s.name} --url ${s.url}`.replace(/\s+/g, ' ');
+      return `codex mcp add ${env} ${shellQuote(s.name)} --url ${shellQuote(s.url)}`.replace(/\s+/g, ' ').trim();
     }
-    return `# (skipped: ${s.name} has neither command nor url)`;
+    return `# (skipped: ${commentSafe(s.name)} has neither command nor url)`;
   });
 }
 
