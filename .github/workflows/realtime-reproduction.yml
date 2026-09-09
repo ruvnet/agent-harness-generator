@@ -1,0 +1,73 @@
+name: Realtime split reproduction
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/bench/realtime/**'
+      - '.github/workflows/realtime-reproduction.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out evaluator
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Check out pinned MidStream candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ruvnet/midstream
+          ref: 8b33d58988d0a204b70af675a524481a0b5a9b9c
+          path: .realtime/midstream
+          persist-credentials: false
+      - name: Check out pinned Ruflo candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ruvnet/ruflo
+          ref: 795746816a513139f93eb0cd5661f5920b84bb4b
+          path: .realtime/ruflo
+          persist-credentials: false
+      - name: Pinned Rust compiler
+        uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: 1.88.0
+      - name: Pinned Node runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+      - name: Install pinned compiler only
+        run: npm install --prefix "$RUNNER_TEMP/realtime-tools" --ignore-scripts --no-fund --no-audit typescript@5.8.3
+      - name: Record pinned sources and runtime
+        run: |
+          git rev-parse HEAD
+          git -C .realtime/midstream rev-parse HEAD
+          git -C .realtime/ruflo rev-parse HEAD
+          rustc --version --verbose
+          node --version
+          sha256sum .realtime/midstream/src/reflex.rs .realtime/ruflo/v3/@claude-flow/integration/src/realtime-session.ts
+      - name: Compile and execute actual Rust contract tests
+        run: |
+          rustc --edition 2021 --test .realtime/midstream/src/reflex.rs -o "$RUNNER_TEMP/reflex-tests"
+          "$RUNNER_TEMP/reflex-tests"
+      - name: Generate handoffs from actual Rust controller
+        run: |
+          mkdir -p "$RUNNER_TEMP/realtime-wire"
+          cp packages/bench/realtime/wire-fixture.rs "$RUNNER_TEMP/realtime-wire/main.rs"
+          cp .realtime/midstream/src/reflex.rs "$RUNNER_TEMP/realtime-wire/reflex-under-test.rs"
+          rustc --edition 2021 "$RUNNER_TEMP/realtime-wire/main.rs" -o "$RUNNER_TEMP/realtime-wire/generate"
+          "$RUNNER_TEMP/realtime-wire/generate" > "$RUNNER_TEMP/realtime-wire/fixtures.jsonl"
+      - name: Strict compile of actual Ruflo module
+        run: '"$RUNNER_TEMP/realtime-tools/node_modules/.bin/tsc" -p .realtime/ruflo/v3/@claude-flow/integration/tsconfig.realtime.json'
+      - name: Execute actual Ruflo contract and HTTP cancellation tests
+        run: node --test .realtime/ruflo/v3/@claude-flow/integration/validation/realtime.contract.mjs
+      - name: Cross-language cancellation reproduction
+        run: node packages/bench/realtime/wire-integration.mjs .realtime/ruflo/v3/@claude-flow/integration/dist/realtime-session.js "$RUNNER_TEMP/realtime-wire/fixtures.jsonl"
+      - name: Randomized paired control benchmark and simpler ablation
+        run: node packages/bench/realtime/benchmark.mjs .realtime/ruflo/v3/@claude-flow/integration/dist/realtime-session.js .realtime/ruflo/v3/@claude-flow/integration/src/realtime-session.ts "$RUNNER_TEMP/realtime-benchmark.json"

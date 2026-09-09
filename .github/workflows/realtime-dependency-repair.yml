@@ -1,0 +1,71 @@
+name: Realtime dependency repair evidence
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/realtime-dependency-repair.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repair-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+      - name: Record original web UI dependency evidence
+        working-directory: apps/web-ui
+        run: |
+          mkdir -p /tmp/realtime-repair
+          git rev-parse HEAD > /tmp/realtime-repair/source-commit.txt
+          set +e
+          npm audit --omit=dev --json --workspaces=false > /tmp/realtime-repair/audit-before.json
+          status=$?
+          set -e
+          echo "$status" > /tmp/realtime-repair/audit-before-exit.txt
+      - name: Prepare narrowly scoped patched sharp floor
+        working-directory: apps/web-ui
+        run: |
+          node --input-type=module - <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = 'package.json';
+          const json = JSON.parse(readFileSync(path, 'utf8'));
+          if (json.overrides.sharp !== '^0.35.3') throw new Error('UNEXPECTED_SHARP_BASELINE');
+          json.overrides.sharp = '^0.35.4';
+          writeFileSync(path, JSON.stringify(json, null, 2) + '\n');
+          JS
+          npm install --package-lock-only --ignore-scripts --no-fund --no-audit --workspaces=false
+      - name: Audit actual candidate lockfile
+        working-directory: apps/web-ui
+        run: npm audit --omit=dev --audit-level=high --json --workspaces=false > /tmp/realtime-repair/audit-after.json
+      - name: Install candidate without lifecycle scripts
+        working-directory: apps/web-ui
+        run: npm ci --ignore-scripts --no-fund --no-audit --workspaces=false
+      - name: Build web UI
+        working-directory: apps/web-ui
+        run: npm run build
+      - name: Test web UI
+        working-directory: apps/web-ui
+        run: npm test
+      - name: Retain exact candidate files and patch
+        run: |
+          git diff --check
+          git diff -- apps/web-ui/package.json apps/web-ui/package-lock.json > /tmp/realtime-repair/dependency-repair.patch
+          cp apps/web-ui/package.json /tmp/realtime-repair/package.json
+          cp apps/web-ui/package-lock.json /tmp/realtime-repair/package-lock.json
+          sha256sum apps/web-ui/package.json apps/web-ui/package-lock.json > /tmp/realtime-repair/files.sha256
+      - name: Upload evidence for review, never push it
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: realtime-dependency-repair
+          path: /tmp/realtime-repair/
+          retention-days: 14
+          if-no-files-found: error
