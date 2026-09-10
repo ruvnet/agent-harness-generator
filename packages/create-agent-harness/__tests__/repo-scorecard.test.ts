@@ -55,6 +55,56 @@ describe('buildRepoScorecard', () => {
   });
 });
 
+// Dream Cycle 2026-09-10 (generator-genome): before this fix, `toolSafety` was
+// computed from `plan.policy`, which recommendPlan() always hardcodes to the
+// same `SAFE` constant regardless of the repo — so the whole policy-posture
+// branch always evaluated identically, and since no archetype ever recommends
+// `mcp: 'off'`, the ONLY variation possible was a binary `plan.mcp === 'remote'`
+// check (-10). toolSafety could only ever be 90 or 100, for any repository.
+describe('toolSafety actually differentiates MCP exposure (Dream Cycle 2026-09-10)', () => {
+  function fixture(opts: { name: string; readme: string; mcpJson?: boolean }): string {
+    const dir = mkdtempSync(join(tmpdir(), `sc-toolsafety-${opts.name}-`));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: opts.name }));
+    writeFileSync(join(dir, 'README.md'), opts.readme);
+    if (opts.mcpJson) {
+      writeFileSync(join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { x: { command: 'npx' } } }));
+    }
+    return dir;
+  }
+
+  it('BUG REPRO (pre-fix would both read 90/100 — a 10-pt gap): a repo whose best-fit archetype is mcp-server-harness (remote MCP) scores measurably lower toolSafety than a repo with no MCP signal at all', () => {
+    const mcpRepo = fixture({
+      name: 'mcp-tool-server',
+      readme: 'An MCP server exposing tools via protocol json rpc stdio streamable http resources prompts.',
+      mcpJson: true,
+    });
+    const sdkRepo = fixture({
+      name: 'acme-sdk',
+      readme: 'A TypeScript SDK client library for the Acme API.',
+    });
+    const mcpSc = buildRepoScorecard(mcpRepo, 'x');
+    const sdkSc = buildRepoScorecard(sdkRepo, 'x');
+    expect(mcpSc.archetype).toBe('mcp-server-harness');
+    expect(sdkSc.archetype).toBe('typescript-sdk-harness');
+    // Real measured values post-fix (Dream Cycle 2026-09-10 evidence run):
+    // mcp-server-harness → 82, typescript-sdk-harness → 95 (gap 13).
+    // Pre-fix these were 90 and 100 (gap 10) for EVERY repo pair with this
+    // archetype split — a fixed, repo-independent constant, not a measurement.
+    expect(mcpSc.toolSafety).toBe(82);
+    expect(sdkSc.toolSafety).toBe(95);
+    expect(sdkSc.toolSafety - mcpSc.toolSafety).toBeGreaterThan(10); // was exactly 10 pre-fix, always
+    expect([mcpSc.toolSafety, sdkSc.toolSafety]).not.toEqual([90, 100]); // the old constant pair
+  });
+
+  it('toolSafety stays in range and the default-deny credit is unaffected for a plain repo with zero MCP signal', () => {
+    const dir = fixture({ name: 'plain-lib', readme: 'A small utility library with no tool integrations.' });
+    const sc = buildRepoScorecard(dir, 'x');
+    expect(sc.toolSafety).toBeGreaterThanOrEqual(0);
+    expect(sc.toolSafety).toBeLessThanOrEqual(100);
+    expect(sc.toolSafety).toBeGreaterThanOrEqual(90); // still high — default-deny credit is real and unchanged
+  });
+});
+
 describe('taskCoverage measures the repo, not the template (#171)', () => {
   let empty: string;
   let real: string;
