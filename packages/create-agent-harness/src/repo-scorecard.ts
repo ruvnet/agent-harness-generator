@@ -11,6 +11,7 @@
 
 import { resolve, basename } from 'node:path';
 import { inventory, analyzeFiles, recommendPlan, scoreArchetypes, ruvllmSemantic, type HarnessPlan } from './analyze-repo.js';
+import { scoreMcpRisk } from './genome-scorers.js';
 import { checkConstraints, summarise, formatConstraints } from './constraints.js';
 
 export type SubcommandResult = { code: number; lines: string[] };
@@ -92,6 +93,25 @@ export function buildRepoScorecard(dir: string, generatedAt: string = new Date()
   );
 
   // Tool safety — the default-deny policy posture, minus MCP exposure.
+  //
+  // Dream Cycle 2026-09-10 (generator-genome): `plan.policy` is ALWAYS the
+  // hardcoded `SAFE` constant (recommendPlan() never derives it from the
+  // repo — see analyze-repo.ts), so every branch below the first `let safety`
+  // line used to evaluate IDENTICALLY on every call, for every repo: the
+  // policy-posture credit was a constant +100, and the only variation came
+  // from a single binary `plan.mcp === 'remote'` check (-10). Since none of
+  // the 8 archetypes ever recommend `mcp: 'off'` (recommendPlan.ARCHETYPES),
+  // that meant `toolSafety` could only ever be 90 or 100 for ANY input
+  // repository — a scorecard dimension that claimed to measure "the tool
+  // safety posture of this repo's recommended design" but in practice never
+  // measured the repo at all, for 7 of 8 archetypes. `scoreMcpRisk()`
+  // (genome-scorers.ts, already used by `harness genome`) computes the exact
+  // same (profile, plan) inputs into a 4-way-differentiated 0..1 exposure
+  // signal (off / local_default_deny / local_permissive / remote) instead of
+  // a single binary check — reused here rather than reinventing a coarser
+  // one. The always-safe default-deny credit itself is not a bug (every
+  // generated harness genuinely does scaffold default-deny — ADR-022) and is
+  // unchanged.
   const p = plan.policy;
   let safety = 0;
   if (p.defaultDeny) safety += 35;
@@ -100,7 +120,8 @@ export function buildRepoScorecard(dir: string, generatedAt: string = new Date()
   if (!p.allowFileWrite) safety += 10;
   if (p.requireApprovalForDangerous) safety += 15;
   if (p.auditLog) safety += 15;
-  if (plan.mcp === 'remote') safety -= 10; // remote MCP is more attack surface
+  const mcpExposure = scoreMcpRisk(profile, plan); // { surface, numeric: 0..1 }
+  safety -= Math.round(mcpExposure.numeric * 30); // scale the shared MCP-risk signal onto a 0..30-pt deduction
   const toolSafety = clamp100(safety);
 
   // Memory usefulness — repo scale: more files / languages / distinct tokens →
