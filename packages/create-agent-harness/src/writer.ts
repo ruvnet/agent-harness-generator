@@ -7,9 +7,29 @@
 
 import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { RenderedFile } from './walker.js';
+
+/**
+ * Refuse a RenderedFile.path that would land outside `root` once joined and
+ * normalized (`../etc/passwd`-shaped path traversal). `RenderedFile.path` is
+ * documented as "posix-style relative" (see walker.ts), but nothing upstream
+ * of writeAtomic currently enforces that — walkTemplate's own paths come
+ * from real files on disk so this never fires today, but writeAtomic is the
+ * single choke point every RenderedFile[] producer eventually writes
+ * through (ADR-046's injection-bug class recurs precisely because each
+ * producer re-invents its own escaping instead of a shared backstop), so it
+ * is the right place to make "stay inside the target directory" a hard
+ * invariant rather than an assumption.
+ */
+function assertWithinRoot(root: string, dst: string, originalPath: string): void {
+  const rel = relative(root, dst);
+  const firstSegment = rel.split(/[\\/]/)[0];
+  if (firstSegment === '..' || isAbsolute(rel)) {
+    throw new Error(`Refusing to write outside the target directory: ${originalPath}`);
+  }
+}
 
 export interface WriteOptions {
   /** Overwrite an existing directory? Defaults to false (refuse to overwrite). */
@@ -43,6 +63,7 @@ export async function writeAtomic(
   try {
     for (const f of files) {
       const dst = join(staging, ...f.path.split('/'));
+      assertWithinRoot(staging, dst, f.path);
       await mkdir(dirname(dst), { recursive: true });
       await writeFile(dst, f.content, 'utf-8');
     }
